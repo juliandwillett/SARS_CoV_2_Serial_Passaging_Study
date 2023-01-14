@@ -312,7 +312,6 @@ for (row in 1:nrow(vep.df)) {
   else if (vep.df$VEPAnnot[[row]] == 'Noncoding') vep.df$VEPSeverity[[row]] = 'Modifier'
 }
 
-
 getVEPData = function(df,print.vep.for.vep) {
   out.df = df
   lines.for.vep = character()

@@ -61,28 +61,6 @@ checkVariantsLate = function(batch,print.vep.for.vep,include.primers) {
   names(out.list) = c('Beta','Delta')
   return(out.list)
 }
-removeOriginalVariants = function(p0,samples) { #not considering p10 b/c unclear sampling
-  out.samples = samples
-  
-  for (lin in 1:2) {
-    for (organ in 1:5) {
-      curr.p0 = p0[[lin]]
-      p0.vcf.form = paste(curr.p0$Ref,curr.p0$Pos,curr.p0$Alt)
-      for (pass in 1:3) {
-        print(glue('On organ {organ} lin {lin} passage {pass}'))
-        for (s in 1:3) {
-          cs = samples[[lin]][[organ]][[pass]][[s]] %>%
-            dplyr::mutate(VcfForm=paste(Ref,Pos,Alt)) %>%
-            dplyr::filter(VcfForm %notin% p0.vcf.form)
-          cs.vep = getVEPData(cs,print.vep.for.vep=F)
-          if (length(which(is.na(cs.vep$VEPConsequence)))>0) stop()
-          out.samples[[lin]][[organ]][[pass]][[s]] = cs.vep
-        }
-      }
-    }
-  }
-  return(out.samples)
-}
 getVariants = function(batch,sample,print.vep.for.vep,include.primers) {
   #print.vep.for.vep outputs missing vep lines
   ###if T, can be pasted into VEP. Otherwise, prints line to add to
@@ -96,9 +74,11 @@ getVariants = function(batch,sample,print.vep.for.vep,include.primers) {
                   VcfForm=character())
   if (batch == 1) f = list.files('Vcfs_FirstRun_PrimersFiltered',sample,full.names=T)
   else if (batch == 2) f = list.files('Vcfs_SecondRun_PrimersFiltered',sample,full.names=T)
-  else if (batch == 3 & !include.primers) f = list.files('Vcfs_Merged_PrimersFiltered_wHeader',sample,full.names=T)
+  else if (batch == 3 & !include.primers) f = list.files('Vcfs_Merged_PrimersFiltered',sample,full.names=T)
   else if (batch == 3 & include.primers) f = list.files('Vcfs_Merged',sample,full.names=T)
-  else if (batch == 4) f = list.files('Vcfs_Merged_P0_P10_PrimersFiltered_wHeader',sample,full.names=T)
+  else if (batch == 4) f = list.files('Vcfs_Merged_P0_P10_PrimersFiltered',sample,full.names=T)
+  
+  f = f[which(!str_detect(f,'.gz'))]
   
   print(glue('Reading file: {f}'))
   
@@ -158,7 +138,7 @@ makeVariantMAFPlotPassage = function(data,pre,organ) {
   stats.out = list()
   
   for (lineage in 1:2) { #make figure for each lineage
-    plt.df = data.frame(Passage=character(),Depth=numeric(),MAF=numeric())
+    plt.df = data.frame(Passage=character(),Depth=numeric(),VAF=numeric())
     
     for (p in 1:3) { #go through each lung passage (13/17/20)
       for (s in 1:3) { #go through each sample in lung
@@ -169,75 +149,74 @@ makeVariantMAFPlotPassage = function(data,pre,organ) {
         tissue = data[[lineage]][[organ]]
         
         plt.df %<>% add_row(Passage=passage,Depth=tissue[[p]][[s]]$Depth,
-                            MAF = tissue[[p]][[s]]$MAF)
+                            VAF = tissue[[p]][[s]]$MAF)
       }
     }
     #Now add P0/P10 data
     plt.df %<>% add_row(Passage='P0',Depth=pre[[1]][[lineage]]$Depth,
-                        MAF=pre[[1]][[lineage]]$MAF) %>%
+                        VAF=pre[[1]][[lineage]]$MAF) %>%
       add_row(Passage='P10',Depth=pre[[2]][[lineage]]$Depth,
-              MAF=pre[[2]][[lineage]]$MAF)
+              VAF=pre[[2]][[lineage]]$MAF)
     
     plts[[lineage]] = plt.df
     comparisons = list(c('P0','P10'),c('P10','P13'),c('P10','P17'),
                        c('P10','P20'),c('P13','P17'),c('P13','P20'),
                        c('P17','P20'))
 
-    comp.df = data.frame(Comparison=character(),PVal=numeric(),AdjPVal=numeric())
+    #store data for pval comparisons
+    comp.df = data.frame(Comparison=character(),PVal=numeric(),AdjPVal=numeric(),
+                         group1=character(),group2=character())
     # comp.df.depth = data.frame(Comparison=character(),PVal=numeric(),AdjPVal=numeric())
     for (comp in comparisons) {
       comp.df %<>% add_row(Comparison=paste(comp,collapse=' '),
-                           PVal=t.test(plt.df$MAF[which(plt.df$Passage==comp[[1]])],
-                                       plt.df$MAF[which(plt.df$Passage==comp[[2]])])$p.value,
-                           AdjPVal=NA)
+                           PVal=t.test(plt.df$VAF[which(plt.df$Passage==comp[[1]])],
+                                       plt.df$VAF[which(plt.df$Passage==comp[[2]])])$p.value,
+                           AdjPVal=NA,group1=comp[[1]],group2=comp[[2]])
       # comp.df.depth %<>% add_row(Comparison=paste(comp,collapse=' '),
       #                      PVal=t.test(plt.df$Depth[which(plt.df$Passage==comp[[1]])],
       #                                  plt.df$Depth[which(plt.df$Passage==comp[[2]])])$p.value,
       #                      AdjPVal=NA)
     }
     comp.df$AdjPVal = round(p.adjust(comp.df$PVal,method='BH'),2)
-    # comp.df %<>% dplyr::mutate(StarSignif=as.character(AdjPVal)) %>%
-    #   dplyr::mutate(StarSignif=ifelse(as.numeric(StarSignif)>0.05,'n.s.',StarSignif)) %>%
-    #   dplyr::mutate(StarSignif=ifelse(as.numeric(StarSignif)>0.01,'*',StarSignif)) %>%
-    #   dplyr::mutate(StarSignif=ifelse(as.numeric(StarSignif)<=0.01,'**',StarSignif))
     
+    star.signif = character()
+    for (p in comp.df$AdjPVal) {
+      if (p > 0.05) star.signif %<>% append('n.s.')
+      else if (p > 0.01) star.signif %<>% append('*')
+      else star.signif %<>% append('**')
+    }
+    comp.df$StarSignif = star.signif
+    comp.df$y.position = c(1.03,1.05,1.12,1.19,1.26,1.33,1.4)
+
     # comp.df.depth$AdjPVal = round(p.adjust(comp.df.depth$PVal,method='BH'),2)
     if (lineage==1) print('Beta') else print('Delta')
-    print('MAF stats')
+    print('VAF stats')
     print(comp.df)
     # print('Depth stats')
     # print(comp.df.depth)
     # stats.out[[lineage]] = list(comp.df,comp.df.depth)
     stats.out[[lineage]] = comp.df
-    num.maf.one = c(nrow(plt.df %>% dplyr::filter(Passage=='P0',MAF==1)),
-                    nrow(plt.df %>% dplyr::filter(Passage=='P10',MAF==1)),
-                    nrow(plt.df %>% dplyr::filter(Passage=='P13',MAF==1)),
-                    nrow(plt.df %>% dplyr::filter(Passage=='P17',MAF==1)),
-                    nrow(plt.df %>% dplyr::filter(Passage=='P20',MAF==1)))
-    num.maf.half = c(nrow(plt.df %>% dplyr::filter(Passage=='P0',MAF==0.5)),
-                    nrow(plt.df %>% dplyr::filter(Passage=='P10',MAF==0.5)),
-                    nrow(plt.df %>% dplyr::filter(Passage=='P13',MAF==0.5)),
-                    nrow(plt.df %>% dplyr::filter(Passage=='P17',MAF==0.5)),
-                    nrow(plt.df %>% dplyr::filter(Passage=='P20',MAF==0.5)))
+    num.maf.one = c(nrow(plt.df %>% dplyr::filter(Passage=='P0',VAF==1)),
+                    nrow(plt.df %>% dplyr::filter(Passage=='P10',VAF==1)),
+                    nrow(plt.df %>% dplyr::filter(Passage=='P13',VAF==1)),
+                    nrow(plt.df %>% dplyr::filter(Passage=='P17',VAF==1)),
+                    nrow(plt.df %>% dplyr::filter(Passage=='P20',VAF==1)))
+    num.maf.half = c(nrow(plt.df %>% dplyr::filter(Passage=='P0',VAF==0.5)),
+                    nrow(plt.df %>% dplyr::filter(Passage=='P10',VAF==0.5)),
+                    nrow(plt.df %>% dplyr::filter(Passage=='P13',VAF==0.5)),
+                    nrow(plt.df %>% dplyr::filter(Passage=='P17',VAF==0.5)),
+                    nrow(plt.df %>% dplyr::filter(Passage=='P20',VAF==0.5)))
     
-    plt = ggplot(plt.df,aes(x=Passage,y=MAF)) + geom_boxplot(outlier.shape=NA) +
-            geom_point(aes(color=Depth),size=5) + stat_boxplot(geom='errorbar') +
+    plt = ggplot(plt.df,aes(x=Passage,y=VAF)) + geom_boxplot(outlier.shape=NA) +
+            geom_point(size=5) + stat_boxplot(geom='errorbar') +
             theme_bw() + ylim(c(0.5,1.5)) +
-            stat_compare_means(comparisons=comparisons,size=6,label.y=c(1.03,1.05,1.12,1.19,1.26,1.33,1.4)) +
+            stat_pvalue_manual(comp.df,label='StarSignif',size=6) +
             # stat_compare_means(label.y=1.05,size=6) +
             annotate('text',x=1:length(table(plt.df$Passage)),y=0.75,size=6,label=glue('n={table(plt.df$Passage)}')) +
             annotate('text',x=1:length(table(plt.df$Passage)),y=0.95,size=6,label=glue('n={num.maf.one}')) +
             annotate('text',x=1:length(table(plt.df$Passage)),y=0.55,size=6,label=glue('n={num.maf.half}')) +
-    guides(fill='none') + theme(text = element_text(size=20))
-    plt = ggplot_build(plt)
-    plt$data[[4]]$annotation[1:3] = round(comp.df$AdjPVal[1],3)
-    plt$data[[4]]$annotation[4:6] = round(comp.df$AdjPVal[2],3)
-    plt$data[[4]]$annotation[7:9] = round(comp.df$AdjPVal[3],3)
-    plt$data[[4]]$annotation[10:12] = round(comp.df$AdjPVal[4],3)
-    plt$data[[4]]$annotation[13:15] = round(comp.df$AdjPVal[5],3)
-    plt$data[[4]]$annotation[16:18] = round(comp.df$AdjPVal[6],3)
-    plt$data[[4]]$annotation[19:21] = round(comp.df$AdjPVal[7],3)
-    
+            guides(fill='none') + theme(text = element_text(size=20))
+
     print(plt)
   }
   return(list(plts,stats.out))
@@ -246,7 +225,7 @@ makeVariantMAFPlotSample = function(data,organ.num) {
   plts = list()
   for (lineage in 1:2) {
     plt.df = data.frame(Passage=character(),Sample=character(),Depth=numeric(),
-                        MAF=numeric())
+                        VAF=numeric())
     
     for (p in 1:3) { #go through each passage (13/17/20)
       for (s in 1:3) { #go through each sample in lung
@@ -256,17 +235,17 @@ makeVariantMAFPlotSample = function(data,organ.num) {
         
         plt.df %<>% add_row(Passage=passage,Sample=as.character(s),
                             Depth=data[[lineage]][[organ.num]][[p]][[s]]$Depth,
-                            MAF=data[[lineage]][[organ.num]][[p]][[s]]$MAF)
+                            VAF=data[[lineage]][[organ.num]][[p]][[s]]$MAF)
       }
     }
     
     plts[[lineage]] = plt.df
-    P13.anova.p = summary(aov(MAF~Sample,data = plt.df %>% dplyr::filter(Passage=='P13')))[[1]][['Pr(>F)']][[1]]
-    P17.anova.p = summary(aov(MAF~Sample,data = plt.df %>% dplyr::filter(Passage=='P17')))[[1]][['Pr(>F)']][[1]]
-    P20.anova.p = summary(aov(MAF~Sample,data = plt.df %>% dplyr::filter(Passage=='P20')))[[1]][['Pr(>F)']][[1]]
+    P13.anova.p = summary(aov(VAF~Sample,data = plt.df %>% dplyr::filter(Passage=='P13')))[[1]][['Pr(>F)']][[1]]
+    P17.anova.p = summary(aov(VAF~Sample,data = plt.df %>% dplyr::filter(Passage=='P17')))[[1]][['Pr(>F)']][[1]]
+    P20.anova.p = summary(aov(VAF~Sample,data = plt.df %>% dplyr::filter(Passage=='P20')))[[1]][['Pr(>F)']][[1]]
     adj.p.vals = round(p.adjust(c(P13.anova.p,P17.anova.p,P20.anova.p),
                           method='BH'),3)
-    print(lineage) ; print('MAF') ; print(adj.p.vals)
+    print(lineage) ; print('VAF') ; print(adj.p.vals)
     
     P13.anova.p.depth = summary(aov(Depth~Sample,data = plt.df %>% dplyr::filter(Passage=='P13')))[[1]][['Pr(>F)']][[1]]
     P17.anova.p.depth = summary(aov(Depth~Sample,data = plt.df %>% dplyr::filter(Passage=='P17')))[[1]][['Pr(>F)']][[1]]
@@ -275,9 +254,9 @@ makeVariantMAFPlotSample = function(data,organ.num) {
                                 method='BH'),3)
     print(lineage) ; print('Depth') ; print(adj.p.vals.depth)
     
-    print(ggplot(plt.df,aes(x=Passage,y=MAF,fill=Sample)) +
+    print(ggplot(plt.df,aes(x=Passage,y=VAF,fill=Sample)) +
             geom_boxplot(outlier.shape=NA) + stat_boxplot(geom='errorbar') +
-            geom_point(position=position_dodge(width=0.8),aes(color=Depth),size=5) + theme_bw() +
+            geom_point(position=position_dodge(width=0.8),size=5) + theme_bw() +
             # stat_compare_means(aes(group=Sample),size=6,label='p.format',label.y=0.3) +
             theme(text = element_text(size=20)) + ylim(c(0,1)) +
             # annotate('text',x=1:length(table(plt.df$Passage)),size=6,y=0.75,label=glue('n={table(plt.df$Passage)}')) +
@@ -555,81 +534,6 @@ makeDFForExcel = function(a.c,pre) { #take allele changes
   }
   return(df.list)
 }
-makeTableWithReadsByVariant = function(df) {
-  out.df = data.frame(Variant=character(),Lin=character(),Organ=character(),
-                      Passage=character(),Sample=character(),
-                      NumReads=numeric(),Depth=numeric(),MAF=numeric(),
-                      Position=numeric())
-  for (lin in 1:length(df)) {
-    for (org in 1:length(df[[lin]])) {
-      for (pass in 1:length(df[[lin]][[org]])) {
-        for (s in 1:length(df[[lin]][[org]][[pass]])) {
-          curr.df = df[[lin]][[org]][[pass]][[s]]
-          out.df %<>% add_row(Variant=curr.df$VcfForm,Lin=names(df)[[lin]],
-                              Organ=names(df[[lin]])[[org]],
-                              Passage=names(df[[lin]][[org]])[[pass]],
-                              Sample=names(df[[lin]][[org]][[pass]])[[s]],
-                              NumReads=curr.df$ReadsSupporting,
-                              Depth=curr.df$Depth,MAF=curr.df$MAF,
-                              Position=curr.df$Pos)
-        }
-      }
-    }
-  }
-  return(out.df %>% dplyr::arrange(Position,Lin,Organ,Passage,Sample))
-}
-makeVariantPlot = function(df,vars) {
-  fig.df = data.frame(Variant=character(),Lineage=character(),
-                      Passage=character(),Freq=numeric(),
-                      Organ=character(),PresentP0=logical(),PresentP10=logical())
-  for (lin in 1:length(df)) {
-    lin.name = names(df)[[lin]]
-    for (var in vars) {
-      new.df = df[[lin]] %>% dplyr::filter(Variant==var)
-      fig.df %<>% add_row(Variant=var,Lineage=lin.name,Passage='P13',Freq=new.df$B.P13.MAF,Organ='Brain',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P17',Freq=new.df$B.P17.MAF,Organ='Brain',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P20',Freq=new.df$B.P20.MAF,Organ='Brain',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P13',Freq=new.df$H.P13.MAF,Organ='Heart',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P17',Freq=new.df$H.P17.MAF,Organ='Heart',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P20',Freq=new.df$H.P20.MAF,Organ='Heart',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P13',Freq=new.df$K.P13.MAF,Organ='Kidney',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P17',Freq=new.df$K.P17.MAF,Organ='Kidney',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P20',Freq=new.df$K.P20.MAF,Organ='Kidney',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P13',Freq=new.df$L.P13.MAF,Organ='Lung',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P17',Freq=new.df$L.P17.MAF,Organ='Lung',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P20',Freq=new.df$L.P20.MAF,Organ='Lung',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P13',Freq=new.df$S.P13.MAF,Organ='Spleen',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P17',Freq=new.df$S.P17.MAF,Organ='Spleen',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10) %>%
-        add_row(Variant=var,Lineage=lin.name,Passage='P20',Freq=new.df$S.P20.MAF,Organ='Spleen',PresentP0=new.df$PresentP0,PresentP10=new.df$PresentP10)
-    }
-  }
-  
-  fig.df %<>% dplyr::mutate(PresentP0=ifelse(PresentP0 == TRUE,'Present P0','Not Present P0')) %>%
-    dplyr::mutate(PresentP10=ifelse(PresentP10 == TRUE,'Present P10','Not Present P10')) %>%
-    dplyr::mutate(Variant=factor(Variant,levels=vars))
-  
-  ggplot(fig.df,aes(x=Passage,y=Freq,color=Organ,label=glue("{PresentP0}\n{PresentP10}"))) + 
-    geom_point(size=3,aes(shape=Organ)) + theme_bw() + geom_line(aes(group=Organ)) +
-    theme(text=element_text(size=16)) + ylim(c(0,1)) +
-    geom_text(aes(x='P17',y=0.5),col='black') +
-    scale_color_brewer(palette='Dark2') +
-    scale_shape_manual(values=c(16,2,9,15,7)) +
-    facet_grid(rows=vars(Lineage),cols=vars(Variant))
-}
-plotLocationAllelesThatChange = function(df) {
-  df %<>% dplyr::filter(abs(P13.MAF - P17.MAF) > 0.5 | abs(P13.MAF - P20.MAF) > 0.5 |
-                          abs(P17.MAF != P20.MAF) > 0.5)
-  fig.df = data.frame(Position=df$Position,Lineage=df$Lineage,
-                      Organ=df$Organ,Passage='P13',Freq=df$P13.MAF) %>%
-    add_row(Position=df$Position,Lineage=df$Lineage,
-            Organ=df$Organ,Passage='P17',Freq=df$P17.MAF) %>%
-    add_row(Position=df$Position,Lineage=df$Lineage,
-            Organ=df$Organ,Passage='P20',Freq=df$P20.MAF)
-  fig = ggplot(fig.df,aes(x=Position,y=Freq,color=Passage,shape=Passage)) +
-    geom_point(size=2) + theme_bw() + facet_grid(rows=vars(Organ),cols=vars(Lineage))
-  print(fig)
-  return(fig.df)
-}
 getSingleSampleMAFChange = function(df,pre) {
   sample.changes = list()
   all.variants = character()
@@ -717,12 +621,12 @@ getSingleSampleMAFChange = function(df,pre) {
 plotSingleSampleMAFChange = function(df,vars) {
   fig.df = data.frame(Variant=character(),Lineage=numeric(),
                       Passage=character(),Sample=numeric(),
-                      MAF=numeric())
+                      VAF=numeric())
   for (l in 1:2) {
     for (s in 1:3) {
       fig.df %<>% add_row(Variant=df[[l]][[s]]$Variant,Lineage=l,
                           Passage=df[[l]][[s]]$Passage,Sample=s,
-                          MAF=df[[l]][[s]]$MAF)
+                          VAF=df[[l]][[s]]$MAF)
     }
   }
   fig.df %<>% dplyr::filter(Variant %in% vars) %>%
@@ -735,14 +639,14 @@ plotSingleSampleMAFChange = function(df,vars) {
     for (pass in c('P0','P10','P13','P17','P20')) {
       for (var in vars) {
         tmp = fig.df %>% dplyr::filter(Lineage==lin,Passage==pass,Variant==var)
-        if (length(unique(tmp$MAF)) > 1)
-          fig.df[which(fig.df$Lineage==lin & fig.df$Passage==pass & fig.df$Variant==var),'AllSameMAFPass'] = tmp$Sample
+        if (length(unique(tmp$VAF)) > 1)
+          fig.df[which(fig.df$Lineage==lin & fig.df$Passage==pass & fig.df$Variant==var),'LabelNumber'] = tmp$Sample
       }
     }
   }
   fig.df$Variant = factor(fig.df$Variant,levels=vars)
   
-  print(ggplot(fig.df,aes(x=Passage,y=MAF,color=Sample,shape=Sample,label=AllSameMAFPass,group=Sample)) + 
+  print(ggplot(fig.df,aes(x=Passage,y=VAF,color=Sample,shape=Sample,label=LabelNumber,group=Sample)) + 
     geom_point(size=3) + theme_bw() + 
     theme(text=element_text(size=16)) + ylim(c(0,1)) +
     scale_color_brewer(palette='Dark2') +
