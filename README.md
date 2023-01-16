@@ -4,4 +4,4 @@ Natural evolution of SARS-CoV-2 variants in K18-ACE2 mice gives rise to more vir
 
 Julian Daniel Sunday Willett, Annie Gravel, Isabelle Dubuc, Leslie Gudimard, Paul Fortin, Ines Colmegna, Jiu-Ling Liu, Jose Hector Galvez, Melissa Zwaig, Anne-Marie Roy, Jiannis Ragoussis*, Louis Flamand*
 
-To reproduce results, run the R code in order to process the data and produce figures.
+To reproduce results, run the R code in order to process the data (from VCF files, which are available from our group by reasonable request) and produce figures.
