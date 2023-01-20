@@ -1,4 +1,4 @@
-makeAwkLinesRemovePrimers = function() {
+makeAwkLinesRemovePrimers = function() { #make lines of code for bash script to remove primers from VCF files using AWK
   loc = read.table('Primers_Positions.bed')
   lines = character()
   for (item in 1:nrow(loc)) {
