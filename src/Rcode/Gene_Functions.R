@@ -3,7 +3,7 @@
 #  downstream/upstream gene variants
 
 #VEP annotations done manually vs pulling from file to ensure picking highest impact 
-#variants and it was strangely more time efficient. Only got those not in P0 to save time
+#variants and it was strangely more time efficient.
 #Verified on 29 Sep 2022
 
 vep.df = data.frame(Pos=numeric(),Ref=character(),Alt=character(),
@@ -312,7 +312,7 @@ for (row in 1:nrow(vep.df)) {
   else if (vep.df$VEPAnnot[[row]] == 'Noncoding') vep.df$VEPSeverity[[row]] = 'Modifier'
 }
 
-getVEPData = function(df,print.vep.for.vep) {
+getVEPData = function(df,print.vep.for.vep) { #print lines to plug into VEP or above data frame, saving time.
   out.df = df
   lines.for.vep = character()
   for (item in 1:nrow(df)) {
