@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --time=1:00:00
-#SBATCH --account=def-ioannisr 
 #SBATCH --job-name='Make merged vcf file'
 #SBATCH --mem-per-cpu=8000M
 #SBATCH --cpus-per-task=4
@@ -12,7 +11,7 @@
 
 module load StdEnv/2020 gcc/9.3.0 bwa/0.7.17 samtools/1.15.1 freebayes/1.3.6 vcftools/0.1.16
 
-cd /lustre04/scratch/willett/ViralCellStudies/
+cd ~
 
 REF_FILE=References/MN908947.3.fa
 BATCH1_CURR_FOLDER=$(sed -n "${SLURM_ARRAY_TASK_ID}p" AllFQ_Batch1_forMerge)
